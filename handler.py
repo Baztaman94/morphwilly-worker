@@ -39,23 +39,50 @@ def _download(url: str, dest: pathlib.Path) -> None:
 
 
 def _run_facefusion(face: pathlib.Path, target: pathlib.Path, out: pathlib.Path) -> None:
-    # Adapt flags to your installed FaceFusion version if needed.
+    # Explicit face-swap only (no lip/audio processors → avoids extra models),
+    # swap every detected face. Adapt flags to your FaceFusion version if needed.
     cmd = [
         "python", "facefusion.py", "headless-run",
+        "--processors", "face_swapper",
+        "--face-selector-mode", "many",
         "--source-paths", str(face),
         "--target-path", str(target),
         "--output-path", str(out),
         "--execution-providers", "cuda",
     ]
     log("FaceFusion:", " ".join(cmd))
-    # Stream FaceFusion's own output into the container logs.
-    proc = subprocess.run(
+    # Stream FaceFusion's own output line-by-line into the container logs
+    # (so we see progress live instead of only after it finishes).
+    proc = subprocess.Popen(
         cmd, cwd=FACEFUSION_DIR, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True,
+        stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
-    log(proc.stdout or "(pas de sortie FaceFusion)")
+    assert proc.stdout is not None
+    tail: list[str] = []
+    for line in proc.stdout:
+        line = line.rstrip()
+        log("[ff]", line)
+        if line:
+            tail.append(line)
+            tail[:] = tail[-12:]  # keep only the last 12 lines
+    proc.wait()
     if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, cmd)
+        # Surface FaceFusion's actual last words so the error shows in the app.
+        raise RuntimeError(
+            f"FaceFusion code {proc.returncode}. Dernières lignes:\n" + "\n".join(tail)
+        )
+
+
+def _log_gpu() -> None:
+    """Report whether onnxruntime can actually use the GPU (CUDA)."""
+    try:
+        import onnxruntime as ort
+        provs = ort.get_available_providers()
+        log("onnxruntime providers:", provs)
+        if "CUDAExecutionProvider" not in provs:
+            log("⚠️ CUDAExecutionProvider ABSENT → FaceFusion tournera sur CPU (lent).")
+    except Exception as e:  # noqa: BLE001
+        log("onnxruntime check impossible:", e)
 
 
 def _maybe_lip_sync(video: pathlib.Path, options: dict) -> pathlib.Path:
@@ -111,6 +138,7 @@ def handler(job: dict) -> dict:
             _download(face_url, face)
             log(f"Source {target.stat().st_size} o, visage {face.stat().st_size} o")
 
+            _log_gpu()
             log("Lancement de FaceFusion…")
             _run_facefusion(face, target, out)
             out = _maybe_lip_sync(out, options)
