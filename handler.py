@@ -23,6 +23,7 @@ import tempfile
 import traceback
 import urllib.request
 
+import requests
 import runpod
 
 FACEFUSION_DIR = os.environ.get("FACEFUSION_DIR", "/app/facefusion")
@@ -100,7 +101,31 @@ def _maybe_lip_sync(video: pathlib.Path, options: dict) -> pathlib.Path:
     return video
 
 
-def _deliver(out: pathlib.Path) -> dict:
+def _deliver(out: pathlib.Path, options: dict) -> dict:
+    # Preferred: push the finished video straight back to the app through the
+    # tunnel, so large HQ files don't have to fit in RunPod's inline response.
+    upload_url = options.get("uploadUrl")
+    if upload_url:
+        log("Renvoi de la vidéo vers l'app:", upload_url, f"({out.stat().st_size} o)")
+        with open(out, "rb") as f:
+            resp = requests.post(
+                upload_url,
+                data=f,
+                headers={
+                    "x-upload-secret": options.get("uploadSecret", ""),
+                    "x-filename": out.name,
+                    "Content-Type": "application/octet-stream",
+                    "ngrok-skip-browser-warning": "1",
+                },
+                timeout=600,
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Renvoi refusé ({resp.status_code}): {resp.text[:200]}")
+        url = resp.json().get("url")
+        if not url:
+            raise RuntimeError("Renvoi accepté mais sans url en retour.")
+        return {"outputUrl": url}
+
     bucket = os.environ.get("S3_BUCKET")
     if bucket:
         import boto3  # imported lazily so base64 mode needs no boto3
@@ -152,7 +177,7 @@ def handler(job: dict) -> dict:
             out = _maybe_lip_sync(out, options)
             log("Rendu terminé:", out, out.stat().st_size, "octets")
 
-            return _deliver(out)
+            return _deliver(out, options)
     except subprocess.CalledProcessError as e:
         log("FaceFusion a échoué, code", e.returncode)
         return {"error": f"FaceFusion a échoué (code {e.returncode})."}
