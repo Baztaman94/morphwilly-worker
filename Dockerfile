@@ -31,9 +31,18 @@ WORKDIR ${FACEFUSION_DIR}
 RUN python -m pip install --upgrade pip \
     && python install.py --onnxruntime cuda --skip-conda
 
-# Bake the FaceFusion models INTO the image so the worker never downloads them
-# at runtime (that first-run download is what blew past the execution timeout).
-RUN python facefusion.py force-download
+# Bake the EXACT models the runtime command needs INTO the image, by running the
+# real command once on a dummy input during build. FaceFusion downloads its
+# models up-front (detector, landmarker, recognizer, swapper), then fails
+# harmlessly on "no face" — but the models are now cached in the image, so the
+# worker never downloads them at runtime.
+RUN python facefusion.py force-download || true
+RUN ffmpeg -y -f lavfi -i color=c=gray:s=512x512:d=1 -frames:v 1 /tmp/face.jpg \
+ && ffmpeg -y -f lavfi -i color=c=gray:s=512x512:d=1 -pix_fmt yuv420p /tmp/vid.mp4 \
+ && (python facefusion.py headless-run --processors face_swapper \
+      --face-selector-mode many --source-paths /tmp/face.jpg \
+      --target-path /tmp/vid.mp4 --output-path /tmp/out.mp4 \
+      --execution-providers cpu || true)
 
 WORKDIR /app
 COPY requirements.txt .
