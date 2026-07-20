@@ -18,6 +18,7 @@ import base64
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import traceback
 import urllib.request
@@ -25,6 +26,11 @@ import urllib.request
 import runpod
 
 FACEFUSION_DIR = os.environ.get("FACEFUSION_DIR", "/app/facefusion")
+
+
+def log(*args) -> None:
+    """Print to stdout, flushed, so RunPod captures it in the Container logs."""
+    print(*args, flush=True)
 
 
 def _download(url: str, dest: pathlib.Path) -> None:
@@ -41,7 +47,15 @@ def _run_facefusion(face: pathlib.Path, target: pathlib.Path, out: pathlib.Path)
         "--output-path", str(out),
         "--execution-providers", "cuda",
     ]
-    subprocess.run(cmd, cwd=FACEFUSION_DIR, check=True)
+    log("FaceFusion:", " ".join(cmd))
+    # Stream FaceFusion's own output into the container logs.
+    proc = subprocess.run(
+        cmd, cwd=FACEFUSION_DIR, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True,
+    )
+    log(proc.stdout or "(pas de sortie FaceFusion)")
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
 
 
 def _maybe_lip_sync(video: pathlib.Path, options: dict) -> pathlib.Path:
@@ -91,16 +105,23 @@ def handler(job: dict) -> dict:
             target = tmpd / "source.mp4"
             face = tmpd / "face.jpg"
             out = tmpd / "output.mp4"
+            log("Téléchargement de la source:", source_url)
             _download(source_url, target)
+            log("Téléchargement du visage:", face_url)
             _download(face_url, face)
+            log(f"Source {target.stat().st_size} o, visage {face.stat().st_size} o")
 
+            log("Lancement de FaceFusion…")
             _run_facefusion(face, target, out)
             out = _maybe_lip_sync(out, options)
+            log("Rendu terminé:", out, out.stat().st_size, "octets")
 
             return _deliver(out)
     except subprocess.CalledProcessError as e:
+        log("FaceFusion a échoué, code", e.returncode)
         return {"error": f"FaceFusion a échoué (code {e.returncode})."}
     except Exception as e:  # noqa: BLE001
+        log("Erreur:", type(e).__name__, e)
         return {"error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-800:]}
 
 

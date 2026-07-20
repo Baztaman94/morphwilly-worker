@@ -31,6 +31,10 @@ WORKDIR ${FACEFUSION_DIR}
 RUN python -m pip install --upgrade pip \
     && python install.py --onnxruntime cuda --skip-conda
 
+# Bake the FaceFusion models INTO the image so the worker never downloads them
+# at runtime (that first-run download is what blew past the execution timeout).
+RUN python facefusion.py force-download
+
 WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install -r requirements.txt
