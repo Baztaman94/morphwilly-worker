@@ -43,8 +43,16 @@ def _run_facefusion(face: pathlib.Path, target: pathlib.Path, out: pathlib.Path)
     # swap every detected face. Adapt flags to your FaceFusion version if needed.
     cmd = [
         "python", "facefusion.py", "headless-run",
-        "--processors", "face_swapper",
+        # Swap + restore the face for a sharp, denoised result.
+        "--processors", "face_swapper", "face_enhancer",
         "--face-selector-mode", "many",
+        # Process the swap at 512px instead of 128px → no more pixelation.
+        "--face-swapper-pixel-boost", "512x512",
+        # GFPGAN restoration removes blur/noise on the swapped face.
+        "--face-enhancer-model", "gfpgan_1.4",
+        "--face-enhancer-blend", "80",
+        # High output quality → fewer compression artefacts.
+        "--output-video-quality", "95",
         "--source-paths", str(face),
         "--target-path", str(target),
         "--output-path", str(out),

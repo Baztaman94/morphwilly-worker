@@ -39,8 +39,11 @@ RUN python -m pip install --upgrade pip \
 RUN python facefusion.py force-download || true
 RUN ffmpeg -y -f lavfi -i color=c=gray:s=512x512:d=1 -frames:v 1 /tmp/face.jpg \
  && ffmpeg -y -f lavfi -i color=c=gray:s=512x512:d=1 -pix_fmt yuv420p /tmp/vid.mp4 \
- && (python facefusion.py headless-run --processors face_swapper \
-      --face-selector-mode many --source-paths /tmp/face.jpg \
+ && (python facefusion.py headless-run \
+      --processors face_swapper face_enhancer \
+      --face-selector-mode many --face-swapper-pixel-boost 512x512 \
+      --face-enhancer-model gfpgan_1.4 \
+      --source-paths /tmp/face.jpg \
       --target-path /tmp/vid.mp4 --output-path /tmp/out.mp4 \
       --execution-providers cpu || true)
 
