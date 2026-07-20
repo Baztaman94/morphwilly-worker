@@ -44,6 +44,13 @@ RUN ffmpeg -y -f lavfi -i color=c=gray:s=512x512:d=1 -frames:v 1 /tmp/face.jpg \
       --target-path /tmp/vid.mp4 --output-path /tmp/out.mp4 \
       --execution-providers cpu || true)
 
+# FaceFusion's GPU detection parses nvidia-smi and crashes when the container
+# returns "Insufficient Permissions" for GPU memory (common on RunPod
+# serverless, MIG or not). Make the memory parse tolerant so it stops crashing.
+RUN grep -q "int(value)" facefusion/execution.py \
+ && sed -i "s/int(value)/(int(value) if str(value).strip().lstrip('-').isdigit() else 0)/g" facefusion/execution.py \
+ && echo "execution.py patché"
+
 WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install -r requirements.txt
