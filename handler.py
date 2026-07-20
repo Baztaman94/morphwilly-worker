@@ -39,27 +39,37 @@ def _download(url: str, dest: pathlib.Path) -> None:
         dest.write_bytes(r.read())
 
 
-def _run_facefusion(face: pathlib.Path, target: pathlib.Path, out: pathlib.Path) -> None:
-    # Explicit face-swap only (no lip/audio processors → avoids extra models),
-    # swap every detected face. Adapt flags to your FaceFusion version if needed.
-    cmd = [
+def _run_facefusion(
+    face: pathlib.Path, target: pathlib.Path, out: pathlib.Path, quality: str
+) -> None:
+    # Two presets driven by the project's quality setting:
+    #   draft → fast preview (swap only, low pixel boost, lighter encode)
+    #   high  → delivery (swap + GFPGAN restoration, 512px, high quality encode)
+    base = [
         "python", "facefusion.py", "headless-run",
-        # Swap + restore the face for a sharp, denoised result.
-        "--processors", "face_swapper", "face_enhancer",
         "--face-selector-mode", "many",
-        # Process the swap at 512px instead of 128px → no more pixelation.
-        "--face-swapper-pixel-boost", "512x512",
-        # GFPGAN restoration removes blur/noise on the swapped face.
-        "--face-enhancer-model", "gfpgan_1.4",
-        "--face-enhancer-blend", "80",
-        # High output quality → fewer compression artefacts.
-        "--output-video-quality", "95",
+    ]
+    if quality == "draft":
+        preset = [
+            "--processors", "face_swapper",
+            "--face-swapper-pixel-boost", "128x128",
+            "--output-video-quality", "80",
+        ]
+    else:  # high
+        preset = [
+            "--processors", "face_swapper", "face_enhancer",
+            "--face-swapper-pixel-boost", "512x512",
+            "--face-enhancer-model", "gfpgan_1.4",
+            "--face-enhancer-blend", "80",
+            "--output-video-quality", "95",
+        ]
+    cmd = base + preset + [
         "--source-paths", str(face),
         "--target-path", str(target),
         "--output-path", str(out),
         "--execution-providers", "cuda",
     ]
-    log("FaceFusion:", " ".join(cmd))
+    log(f"FaceFusion (qualité={quality}):", " ".join(cmd))
     # Stream FaceFusion's own output line-by-line into the container logs
     # (so we see progress live instead of only after it finishes).
     proc = subprocess.Popen(
@@ -172,8 +182,9 @@ def handler(job: dict) -> dict:
             log(f"Source {target.stat().st_size} o, visage {face.stat().st_size} o")
 
             _log_gpu()
+            quality = "draft" if options.get("quality") == "draft" else "high"
             log("Lancement de FaceFusion…")
-            _run_facefusion(face, target, out)
+            _run_facefusion(face, target, out, quality)
             out = _maybe_lip_sync(out, options)
             log("Rendu terminé:", out, out.stat().st_size, "octets")
 
